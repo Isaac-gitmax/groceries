@@ -47,6 +47,9 @@ main{padding:12px 16px 120px}
 .chip{border:1px solid var(--line);background:var(--bg);border-radius:999px;padding:8px 14px;min-height:40px}
 .chip.missing{background:var(--miss-bg);border-color:var(--miss-line);color:var(--miss);font-weight:600}
 .chip small{opacity:.8;font-weight:400;margin-inline-start:5px}
+.qty{font-weight:700;margin-inline-start:6px;white-space:nowrap}
+.dec{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--miss);color:#fff;margin-inline-start:8px;font-weight:700;line-height:1;vertical-align:middle}
+.shop-item .qty{margin-inline-start:auto;color:var(--ink)}
 .chip.add{border-style:dashed;color:var(--muted);background:none}
 body.edit .chip:not(.add){border-style:dashed}
 .dept-tools{display:flex;gap:4px}
@@ -103,9 +106,10 @@ label{display:block;font-size:14px;color:var(--muted);margin:14px 0 5px}
   <input class="field" id="fName" required autocomplete="off">
   <label for="fDept">מחלקה</label>
   <select class="field" id="fDept"></select>
-  <label for="fNote">כמות / הערה (לא חובה)</label>
-  <input class="field" id="fNote" placeholder="למשל: 2 ק״ג, 3%, מותג מסוים" autocomplete="off">
-  <label class="check"><input type="checkbox" id="fMissing"> חסר עכשיו</label>
+  <label for="fQty">כמות חסרה (0 = לא חסר)</label>
+  <input class="field" id="fQty" type="number" min="0" step="0.5" inputmode="decimal">
+  <label for="fNote">הערה (לא חובה)</label>
+  <input class="field" id="fNote" placeholder="למשל: 3%, מותג מסוים" autocomplete="off">
   <div class="actions">
     <button class="primary" value="save">שמירה</button>
     <button class="ghost" value="cancel" formnovalidate>ביטול</button>
@@ -119,6 +123,8 @@ label{display:block;font-size:14px;color:var(--muted);margin:14px 0 5px}
   <input class="field" id="dName" required autocomplete="off">
   <label for="dIcon">אייקון (אימוג׳י)</label>
   <input class="field" id="dIcon" autocomplete="off">
+  <label for="dUnit">יחידת מידה</label>
+  <select class="field" id="dUnit"><option>יח׳</option><option>ק״ג</option><option>גרם</option><option>ליטר</option><option>אריזה</option></select>
   <div class="actions">
     <button class="primary" value="save">שמירה</button>
     <button class="ghost" value="cancel" formnovalidate>ביטול</button>
@@ -162,10 +168,16 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function seed() {
-  const depts = DEFAULT_DEPTS.map(d => ({ id: uid(), name: d[0], icon: d[1] }));
+  const depts = DEFAULT_DEPTS.map(d => ({ id: uid(), name: d[0], icon: d[1], unit: defUnit(d[0]) }));
   const items = [];
-  DEFAULT_DEPTS.forEach((d, i) => d[2].forEach(n => items.push({ id: uid(), name: n, dept: depts[i].id, note: '', missing: false, cart: false })));
+  DEFAULT_DEPTS.forEach((d, i) => d[2].forEach(n => items.push({ id: uid(), name: n, dept: depts[i].id, note: '', qty: 0, missing: false, cart: false })));
   return { depts, items };
+}
+const defUnit = name => /בשר|עוף|דג/.test(name) ? 'ק״ג' : 'יח׳';
+function migrate(s) {
+  s.depts.forEach(d => { if (!d.unit) d.unit = defUnit(d.name); });
+  s.items.forEach(i => { if (typeof i.qty !== 'number') i.qty = i.missing ? 1 : 0; });
+  return s;
 }
 function load() {
   try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && Array.isArray(s.depts) && Array.isArray(s.items)) return s; } catch (e) {}
@@ -175,7 +187,7 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catc
 function loadUI() { try { return new Set(JSON.parse(localStorage.getItem(UI_KEY)) || []); } catch (e) { return new Set(); } }
 function saveUI() { try { localStorage.setItem(UI_KEY, JSON.stringify([...collapsed])); } catch (e) {} }
 
-let state = load();
+let state = migrate(load());
 let collapsed = loadUI();
 let view = 'home', editMode = false, query = '';
 let editingItem = null, editingDept = null;
@@ -183,6 +195,7 @@ save();
 
 const findItem = id => state.items.find(i => i.id === id);
 const findDept = id => state.depts.find(d => d.id === id);
+const fmtQty = i => `${+(+i.qty || 0).toFixed(2)} ${findDept(i.dept)?.unit || 'יח׳'}`;
 
 function render() {
   $('#tab-home').classList.toggle('active', view === 'home');
@@ -200,7 +213,7 @@ function renderHome() {
   const q = query.trim();
   let html = q ? '' : `<p class="hint">${editMode
     ? 'מצב עריכה: לחץ על פריט כדי לשנות או למחוק אותו. החצים משנים את סדר המחלקות (לפי סדר המעבר בסופר).'
-    : 'לחץ על פריט כדי לסמן שהוא חסר. לחיצה נוספת מבטלת.'}</p>`;
+    : 'כל לחיצה על פריט מוסיפה 1 לכמות החסרה. הכפתור − מפחית.'}</p>`;
   let found = false;
   state.depts.forEach((d, idx) => {
     let items = state.items.filter(i => i.dept === d.id);
@@ -222,7 +235,7 @@ function renderHome() {
         ${miss ? `<span class="cnt">${miss} חסרים</span>` : ''}${tools}
       </div>
       <div class="chips">
-        ${items.map(i => `<button class="chip${i.missing ? ' missing' : ''}" data-action="item" data-id="${i.id}">${esc(i.name)}${i.note ? `<small>${esc(i.note)}</small>` : ''}</button>`).join('')}
+        ${items.map(i => `<button class="chip${i.missing ? ' missing' : ''}" data-action="item" data-id="${i.id}">${esc(i.name)}${i.missing ? `<span class="qty">${esc(fmtQty(i))}</span>` : ''}${i.note ? `<small>${esc(i.note)}</small>` : ''}${i.missing && !editMode ? `<span class="dec" data-action="dec" data-id="${i.id}" role="button" aria-label="הפחתה">−</span>` : ''}</button>`).join('')}
         <button class="chip add" data-action="add" data-dept="${d.id}">+ הוספה</button>
       </div>
     </section>`;
@@ -250,6 +263,7 @@ function renderShop() {
       ${its.map(i => `<button class="shop-item${i.cart ? ' in-cart' : ''}" data-action="cart" data-id="${i.id}">
         <span class="box">${i.cart ? '✓' : ''}</span>
         <span class="label">${esc(i.name)}${i.note ? `<small>${esc(i.note)}</small>` : ''}</span>
+        <span class="qty">${esc(fmtQty(i))}</span>
       </button>`).join('')}
     </section>`;
   });
@@ -274,7 +288,7 @@ function openItem(it, deptId, name) {
   $('#fName').value = it ? it.name : (name || '');
   $('#fDept').value = it ? it.dept : (deptId || state.depts[0]?.id || '');
   $('#fNote').value = it ? (it.note || '') : '';
-  $('#fMissing').checked = it ? it.missing : true;
+  $('#fQty').value = it ? (it.qty || 0) : 1;
   $('#fDelete').hidden = !it;
   $('#itemDlg').returnValue = '';
   $('#itemDlg').showModal();
@@ -286,7 +300,8 @@ $('#itemDlg').addEventListener('close', () => {
   if (r === 'save') {
     const name = $('#fName').value.trim();
     if (!name || !$('#fDept').value) return;
-    const data = { name, dept: $('#fDept').value, note: $('#fNote').value.trim(), missing: $('#fMissing').checked };
+    const qty = Math.max(0, parseFloat($('#fQty').value) || 0);
+    const data = { name, dept: $('#fDept').value, note: $('#fNote').value.trim(), qty, missing: qty > 0 };
     const target = editingItem || state.items.find(i => i.name === name && i.dept === data.dept);
     if (target) { Object.assign(target, data); if (!data.missing) target.cart = false; }
     else state.items.push({ id: uid(), cart: false, ...data });
@@ -303,6 +318,7 @@ function openDept(d) {
   $('#deptTitle').textContent = d ? 'עריכת מחלקה' : 'מחלקה חדשה';
   $('#dName').value = d ? d.name : '';
   $('#dIcon').value = d ? d.icon : '📦';
+  $('#dUnit').value = d ? (d.unit || 'יח׳') : 'יח׳';
   $('#dDelete').hidden = !d || state.depts.length < 2;
   $('#deptDlg').returnValue = '';
   $('#deptDlg').showModal();
@@ -311,10 +327,10 @@ function openDept(d) {
 $('#deptDlg').addEventListener('close', () => {
   const r = $('#deptDlg').returnValue;
   if (r === 'save') {
-    const name = $('#dName').value.trim(), icon = $('#dIcon').value.trim() || '📦';
+    const name = $('#dName').value.trim(), icon = $('#dIcon').value.trim() || '📦', unit = $('#dUnit').value;
     if (!name) return;
-    if (editingDept) Object.assign(editingDept, { name, icon });
-    else state.depts.push({ id: uid(), name, icon });
+    if (editingDept) Object.assign(editingDept, { name, icon, unit });
+    else state.depts.push({ id: uid(), name, icon, unit });
   } else if (r === 'delete' && editingDept) {
     const n = state.items.filter(i => i.dept === editingDept.id).length;
     if (!confirm(n ? `במחלקה ״${editingDept.name}״ יש ${n} פריטים. למחוק את המחלקה ואת כל הפריטים שבה?` : `למחוק את המחלקה ״${editingDept.name}״?`)) return;
@@ -331,7 +347,7 @@ function listText() {
   state.depts.forEach(d => {
     const its = miss.filter(i => i.dept === d.id);
     if (!its.length) return;
-    t += `\n${d.icon} ${d.name}\n` + its.map(i => `• ${i.name}${i.note ? ` (${i.note})` : ''}`).join('\n') + '\n';
+    t += `\n${d.icon} ${d.name}\n` + its.map(i => `• ${i.name} — ${fmtQty(i)}${i.note ? ` (${i.note})` : ''}`).join('\n') + '\n';
   });
   return t.trim();
 }
@@ -366,7 +382,7 @@ $('#file').addEventListener('change', async e => {
   try {
     const s = JSON.parse(await f.text());
     if (!Array.isArray(s.depts) || !Array.isArray(s.items)) throw new Error('bad');
-    state = s; save(); render(); toast('הגיבוי נטען');
+    state = migrate(s); save(); render(); toast('הגיבוי נטען');
   } catch (_) { toast('קובץ לא תקין'); }
   e.target.value = '';
 });
@@ -388,13 +404,19 @@ document.addEventListener('click', e => {
     case 'item': {
       const it = findItem(id); if (!it) break;
       if (editMode) openItem(it);
-      else { it.missing = !it.missing; if (!it.missing) it.cart = false; save(); render(); }
+      else { it.qty = (+it.qty || 0) + 1; it.missing = true; save(); render(); }
       break;
+    }
+    case 'dec': {
+      const it = findItem(id); if (!it) break;
+      it.qty = Math.max(0, (+it.qty || 0) - 1);
+      if (!it.qty) { it.missing = false; it.cart = false; }
+      save(); render(); break;
     }
     case 'cart': { const it = findItem(id); if (it) { it.cart = !it.cart; save(); render(); } break; }
     case 'finish': {
       const n = state.items.filter(i => i.cart).length;
-      state.items.forEach(i => { if (i.cart) { i.cart = false; i.missing = false; } });
+      state.items.forEach(i => { if (i.cart) { i.cart = false; i.missing = false; i.qty = 0; } });
       save(); render(); toast(`${n} פריטים עודכנו כנקנו`); break;
     }
     case 'add': openItem(null, el.dataset.dept, el.dataset.name); break;
@@ -410,7 +432,7 @@ document.addEventListener('click', e => {
     case 'import': menu.close(); $('#file').click(); break;
     case 'reset':
       menu.close();
-      if (confirm('לאפס את כל הרשימה לברירת המחדל? כל השינויים שלך יימחקו.')) { state = seed(); save(); render(); }
+      if (confirm('לאפס את כל הרשימה לברירת המחדל? כל השינויים שלך יימחקו.')) { state = migrate(seed()); save(); render(); }
       break;
     case 'close': menu.close(); break;
   }
@@ -423,12 +445,12 @@ $('#search').addEventListener('keydown', e => {
   if (e.key === 'Enter' && query.trim()) {
     const q = query.trim();
     const exact = state.items.find(i => i.name === q);
-    if (exact) { exact.missing = true; save(); query = ''; e.target.value = ''; render(); toast(`״${q}״ סומן כחסר`); }
+    if (exact) { exact.qty = (+exact.qty || 0) + 1; exact.missing = true; save(); query = ''; e.target.value = ''; render(); toast(`״${q}״: ${fmtQty(exact)}`); }
     else openItem(null, null, q);
   }
 });
 
-window.addEventListener('storage', e => { if (e.key === KEY) { state = load(); render(); } });
+window.addEventListener('storage', e => { if (e.key === KEY) { state = migrate(load()); render(); } });
 
 render();
 </script>
