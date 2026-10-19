@@ -151,6 +151,15 @@ label{display:block;font-size:14px;color:var(--muted);margin:14px 0 5px}
   <button data-action="close">סגירה</button>
 </dialog>
 
+<dialog id="askDlg"><form method="dialog">
+  <p id="askMsg" style="font-size:17px;line-height:1.5;margin:4px 0 0"></p>
+  <div class="actions">
+    <button class="primary" value="yes" id="askYes">אישור</button>
+    <button class="ghost" value="no" id="askNo">ביטול</button>
+    <button class="ghost" value="" id="askCancel" formnovalidate>חזרה</button>
+  </div>
+</form></dialog>
+
 <input type="file" id="file" accept=".json,application/json" hidden>
 <div class="toast" id="toast"></div>
 
@@ -377,7 +386,7 @@ function openItem(it, deptId, name) {
   if (!it) setTimeout(() => $('#fName').focus(), 60);
 }
 
-$('#itemDlg').addEventListener('close', () => {
+$('#itemDlg').addEventListener('close', async () => {
   const r = $('#itemDlg').returnValue;
   if (r === 'save') {
     const name = $('#fName').value.trim();
@@ -389,7 +398,7 @@ $('#itemDlg').addEventListener('close', () => {
     else state.items.push({ id: uid(), cart: false, ...data });
     if (query) { query = ''; $('#search').value = ''; }
   } else if (r === 'delete' && editingItem) {
-    if (!confirm(`למחוק את ״${editingItem.name}״?`)) return;
+    if (!(await sure(`למחוק את ״${editingItem.name}״?`, 'מחיקה'))) return;
     state.items = state.items.filter(i => i !== editingItem);
   } else return;
   save(); render();
@@ -406,7 +415,7 @@ function openDept(d) {
   $('#deptDlg').showModal();
 }
 
-$('#deptDlg').addEventListener('close', () => {
+$('#deptDlg').addEventListener('close', async () => {
   const r = $('#deptDlg').returnValue;
   if (r === 'save') {
     const name = $('#dName').value.trim(), icon = $('#dIcon').value.trim() || '📦', unit = $('#dUnit').value;
@@ -415,7 +424,7 @@ $('#deptDlg').addEventListener('close', () => {
     else state.depts.push({ id: uid(), name, icon, unit });
   } else if (r === 'delete' && editingDept) {
     const n = state.items.filter(i => i.dept === editingDept.id).length;
-    if (!confirm(n ? `במחלקה ״${editingDept.name}״ יש ${n} פריטים. למחוק את המחלקה ואת כל הפריטים שבה?` : `למחוק את המחלקה ״${editingDept.name}״?`)) return;
+    if (!(await sure(n ? `במחלקה ״${editingDept.name}״ יש ${n} פריטים. למחוק את המחלקה ואת כל הפריטים שבה?` : `למחוק את המחלקה ״${editingDept.name}״?`, 'מחיקה'))) return;
     state.items = state.items.filter(i => i.dept !== editingDept.id);
     state.depts = state.depts.filter(d => d !== editingDept);
   } else return;
@@ -466,6 +475,19 @@ $('#file').addEventListener('change', async e => {
   e.target.value = '';
 });
 
+function ask(msg, yes = 'אישור', no = 'ביטול', cancel = '') {
+  return new Promise(res => {
+    const d = $('#askDlg');
+    if (!d.showModal) return res(confirm(msg) ? 'yes' : '');
+    $('#askMsg').textContent = msg; $('#askYes').textContent = yes; $('#askNo').textContent = no;
+    $('#askCancel').textContent = cancel; $('#askCancel').hidden = !cancel;
+    d.returnValue = '';
+    d.addEventListener('close', () => res(d.returnValue), { once: true });
+    d.showModal();
+  });
+}
+const sure = async (msg, yes) => (await ask(msg, yes)) === 'yes';
+
 function toast(m) {
   const t = $('#toast');
   t.textContent = m; t.classList.add('show');
@@ -495,24 +517,27 @@ document.addEventListener('click', e => {
     case 'order-create': createOrder(); break;
     case 'got': { const o = findOrder(el.dataset.oid); const x = o && o.items[+el.dataset.idx]; if (x) { x.got = !x.got; save(); render(); } break; }
     case 'order-share': { const o = findOrder(el.dataset.oid); if (o) shareText(orderText(o)); break; }
-    case 'order-close': {
-      const o = findOrder(el.dataset.oid); if (!o) break;
-      if (!confirm('לסגור את ההזמנה?')) break;
+    case 'order-close': (async () => {
+      const o = findOrder(el.dataset.oid); if (!o) return;
       const left = o.items.filter(x => !x.got);
-      if (left.length && confirm(`${left.length} פריטים לא סומנו כהתקבלו. להחזיר אותם לרשימת החסרים?`)) returnToList(left);
-      o.status = 'closed'; o.closed = Date.now(); save(); render(); toast('ההזמנה נסגרה'); break;
-    }
-    case 'order-cancel': {
-      const o = findOrder(el.dataset.oid); if (!o) break;
-      if (!confirm('לבטל את ההזמנה ולהחזיר את כל הפריטים שלה לרשימת החסרים?')) break;
-      returnToList(o.items); state.orders = state.orders.filter(z => z !== o); save(); render(); toast('הפריטים הוחזרו לרשימה'); break;
-    }
+      if (left.length) {
+        const a = await ask(`${left.length} פריטים לא סומנו כהתקבלו. להחזיר אותם לרשימת החסרים?`, 'סגירה והחזרה לרשימה', 'סגירה בלי להחזיר', 'חזרה');
+        if (!a) return;
+        if (a === 'yes') returnToList(left);
+      } else if (!(await sure('לסגור את ההזמנה?', 'סגירה'))) return;
+      o.status = 'closed'; o.closed = Date.now(); save(); render(); toast('ההזמנה נסגרה');
+    })(); break;
+    case 'order-cancel': (async () => {
+      const o = findOrder(el.dataset.oid); if (!o) return;
+      if (!(await sure('לבטל את ההזמנה ולהחזיר את כל הפריטים שלה לרשימת החסרים?', 'ביטול הזמנה'))) return;
+      returnToList(o.items); state.orders = state.orders.filter(z => z !== o); save(); render(); toast('הפריטים הוחזרו לרשימה');
+    })(); break;
     case 'order-reopen': { const o = findOrder(el.dataset.oid); if (o) { o.status = 'open'; delete o.closed; save(); render(); } break; }
-    case 'order-delete': {
-      const o = findOrder(el.dataset.oid); if (!o) break;
-      if (!confirm('למחוק את ההזמנה הסגורה לצמיתות?')) break;
-      state.orders = state.orders.filter(z => z !== o); save(); render(); break;
-    }
+    case 'order-delete': (async () => {
+      const o = findOrder(el.dataset.oid); if (!o) return;
+      if (!(await sure('למחוק את ההזמנה הסגורה לצמיתות?', 'מחיקה'))) return;
+      state.orders = state.orders.filter(z => z !== o); save(); render();
+    })(); break;
     case 'cart': { const it = findItem(id); if (it) { it.cart = !it.cart; save(); render(); } break; }
     case 'finish': {
       const n = state.items.filter(i => i.cart).length;
@@ -532,7 +557,7 @@ document.addEventListener('click', e => {
     case 'import': menu.close(); $('#file').click(); break;
     case 'reset':
       menu.close();
-      if (confirm('לאפס את כל הרשימה לברירת המחדל? כל השינויים שלך יימחקו.')) { state = migrate(seed()); save(); render(); }
+      sure('לאפס את כל הרשימה לברירת המחדל? כל השינויים וההזמנות יימחקו.', 'איפוס').then(ok => { if (ok) { state = migrate(seed()); save(); render(); } });
       break;
     case 'close': menu.close(); break;
   }
