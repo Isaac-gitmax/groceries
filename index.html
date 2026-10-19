@@ -25,7 +25,7 @@ h1{font-size:20px;margin:0;flex:1}
 h2{font-size:18px;margin:0 0 4px}
 .icon-btn{background:none;border:1px solid var(--line);border-radius:10px;width:42px;height:42px;font-size:18px}
 .icon-btn.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
-.tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:var(--line);padding:4px;border-radius:12px;margin-top:10px}
+.tabs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;background:var(--line);padding:4px;border-radius:12px;margin-top:10px}
 .tab{border:0;background:none;padding:9px;border-radius:9px;font-weight:600;color:var(--muted)}
 .tab.active{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .badge{display:inline-block;min-width:22px;padding:0 6px;border-radius:11px;background:var(--miss);color:#fff;font-size:13px;line-height:22px;margin-inline-start:6px}
@@ -61,6 +61,14 @@ body.edit .chip:not(.add){border-style:dashed}
 .in-cart .label{text-decoration:line-through;color:var(--done)}
 .bottom{position:fixed;inset-inline:0;bottom:0;padding:16px;padding-bottom:max(14px,env(safe-area-inset-bottom));background:linear-gradient(transparent,var(--bg) 35%)}
 .bottom .primary{width:100%;max-width:720px;display:block;margin:0 auto;height:52px;font-size:17px}
+.shop-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-top:1px solid var(--line)}
+.order-actions{display:flex;flex-wrap:wrap;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
+.order-actions .ghost,.order-actions .primary{height:40px;padding:0 12px;font-size:15px}
+.order-h{flex-wrap:wrap}
+.history{margin-top:18px}
+.history summary{cursor:pointer;color:var(--muted);font-weight:600;padding:10px 2px}
+.closed-row{display:flex;align-items:center;gap:8px;padding:12px 14px;border-top:1px solid var(--line);flex-wrap:wrap}
+.closed-row .name{flex:1;min-width:150px}
 .empty{text-align:center;color:var(--muted);padding:56px 0;line-height:1.6}
 .ghost{background:none;border:1px solid var(--line);border-radius:10px;height:44px;padding:0 16px}
 .wide{width:100%;border-style:dashed;color:var(--muted)}
@@ -87,8 +95,9 @@ label{display:block;font-size:14px;color:var(--muted);margin:14px 0 5px}
     <button class="icon-btn" data-action="menu" title="תפריט" aria-label="תפריט">⋯</button>
   </div>
   <div class="tabs">
-    <button class="tab" id="tab-home" data-action="tab" data-view="home">מה חסר בבית</button>
+    <button class="tab" id="tab-home" data-action="tab" data-view="home">בבית</button>
     <button class="tab" id="tab-shop" data-action="tab" data-view="shop">לקנייה<span class="badge" id="badge" hidden></span></button>
+    <button class="tab" id="tab-orders" data-action="tab" data-view="orders">הזמנות<span class="badge" id="obadge" hidden></span></button>
   </div>
   <div class="row toolbar" id="toolbar">
     <input class="search" id="search" type="search" placeholder="חיפוש פריט..." autocomplete="off">
@@ -177,6 +186,7 @@ const defUnit = name => /בשר|עוף|דג/.test(name) ? 'ק״ג' : 'יח׳';
 function migrate(s) {
   s.depts.forEach(d => { if (!d.unit) d.unit = defUnit(d.name); });
   s.items.forEach(i => { if (typeof i.qty !== 'number') i.qty = i.missing ? 1 : 0; });
+  if (!Array.isArray(s.orders)) s.orders = [];
   return s;
 }
 function load() {
@@ -200,13 +210,16 @@ const fmtQty = i => `${+(+i.qty || 0).toFixed(2)} ${findDept(i.dept)?.unit || '�
 function render() {
   $('#tab-home').classList.toggle('active', view === 'home');
   $('#tab-shop').classList.toggle('active', view === 'shop');
+  $('#tab-orders').classList.toggle('active', view === 'orders');
+  const oc = state.orders.filter(o => o.status === 'open').length;
+  $('#obadge').textContent = oc; $('#obadge').hidden = !oc;
   const n = state.items.filter(i => i.missing).length;
   $('#badge').textContent = n; $('#badge').hidden = !n;
   $('#toolbar').hidden = view !== 'home';
   $('#editBtn').hidden = view !== 'home';
   $('#editBtn').classList.toggle('on', editMode);
   document.body.classList.toggle('edit', editMode);
-  view === 'home' ? renderHome() : renderShop();
+  if (view === 'home') renderHome(); else if (view === 'shop') renderShop(); else renderOrders();
 }
 
 function renderHome() {
@@ -249,29 +262,98 @@ function renderHome() {
 function renderShop() {
   const miss = state.items.filter(i => i.missing);
   if (!miss.length) {
-    $('#list').innerHTML = '<div class="empty">אין מה לקנות כרגע 🎉<br>סמן פריטים חסרים בלשונית ״מה חסר בבית״</div>';
+    $('#list').innerHTML = '<div class="empty">אין מה לקנות כרגע 🎉<br>סמן פריטים חסרים בלשונית ״בבית״</div>';
     $('#bottom').hidden = true;
     return;
   }
-  let html = '';
+  let html = '<p class="hint">זו הרשימה הנוכחית. לחיצה על ״יצירת הזמנה״ שומרת אותה לפי תאריך בלשונית ״הזמנות״ ומנקה את הרשימה לקראת הפעם הבאה.</p>';
   state.depts.forEach(d => {
     const its = miss.filter(i => i.dept === d.id);
     if (!its.length) return;
     html += `<section class="dept">
-      <div class="dept-h static"><span>${esc(d.icon)}</span><span class="name">${esc(d.name)}</span>
-        <span class="muted">${its.filter(i => i.cart).length}/${its.length}</span></div>
-      ${its.map(i => `<button class="shop-item${i.cart ? ' in-cart' : ''}" data-action="cart" data-id="${i.id}">
-        <span class="box">${i.cart ? '✓' : ''}</span>
-        <span class="label">${esc(i.name)}${i.note ? `<small>${esc(i.note)}</small>` : ''}</span>
-        <span class="qty">${esc(fmtQty(i))}</span>
-      </button>`).join('')}
+      <div class="dept-h static"><span>${esc(d.icon)}</span><span class="name">${esc(d.name)}</span><span class="muted">${its.length}</span></div>
+      ${its.map(i => `<div class="shop-row"><span class="label">${esc(i.name)}${i.note ? `<small>${esc(i.note)}</small>` : ''}</span><span class="qty">${esc(fmtQty(i))}</span></div>`).join('')}
     </section>`;
   });
   $('#list').innerHTML = html;
-  const c = miss.filter(i => i.cart).length;
   $('#bottom').hidden = false;
-  $('#finish').disabled = !c;
-  $('#finish').textContent = c ? `סיימתי — עדכון ${c} פריטים שנקנו` : 'סמן את מה שהכנסת לעגלה';
+  $('#finish').disabled = false;
+  $('#finish').dataset.action = 'order-create';
+  $('#finish').textContent = `📦 יצירת הזמנה (${miss.length} פריטים)`;
+}
+
+const fmtDate = ts => new Date(ts).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const oQty = x => `${+(+x.qty || 0).toFixed(2)} ${x.unit}`;
+const findOrder = id => state.orders.find(o => o.id === id);
+
+function renderOrders() {
+  $('#bottom').hidden = true;
+  const open = state.orders.filter(o => o.status === 'open').sort((a, b) => b.created - a.created);
+  const closed = state.orders.filter(o => o.status !== 'open').sort((a, b) => (b.closed || 0) - (a.closed || 0));
+  let html = '';
+  if (!open.length) html += '<div class="empty">אין הזמנות פתוחות<br>יוצרים הזמנה מהלשונית ״לקנייה״</div>';
+  open.forEach(o => {
+    const got = o.items.filter(x => x.got).length;
+    let rows = '', last = null;
+    o.items.forEach((x, idx) => {
+      if (x.deptName !== last) { last = x.deptName; rows += `<div class="dept-h static muted">${esc(x.icon)} ${esc(x.deptName)}</div>`; }
+      rows += `<button class="shop-item${x.got ? ' in-cart' : ''}" data-action="got" data-oid="${o.id}" data-idx="${idx}">
+        <span class="box">${x.got ? '✓' : ''}</span>
+        <span class="label">${esc(x.name)}${x.note ? `<small>${esc(x.note)}</small>` : ''}</span>
+        <span class="qty">${esc(oQty(x))}</span></button>`;
+    });
+    html += `<section class="dept">
+      <div class="dept-h static order-h"><span>📦</span><span class="name">הזמנה ${esc(fmtDate(o.created))}</span><span class="muted">התקבלו ${got}/${o.items.length}</span></div>
+      ${rows}
+      <div class="order-actions">
+        <button class="primary" data-action="order-close" data-oid="${o.id}">סגירת הזמנה</button>
+        <button class="ghost" data-action="order-share" data-oid="${o.id}">📤 שליחה</button>
+        <button class="ghost" data-action="order-cancel" data-oid="${o.id}">ביטול והחזרה לרשימה</button>
+      </div>
+    </section>`;
+  });
+  if (closed.length) {
+    html += `<details class="history"><summary>הזמנות סגורות (${closed.length})</summary><section class="dept">
+      ${closed.map(o => `<div class="closed-row"><span class="name">📦 ${esc(fmtDate(o.created))}<br><small class="muted">${o.items.length} פריטים · נסגרה ${esc(fmtDate(o.closed))}</small></span>
+        <button class="ghost" data-action="order-reopen" data-oid="${o.id}">פתיחה מחדש</button>
+        <button class="ghost danger" data-action="order-delete" data-oid="${o.id}">מחיקה</button></div>`).join('')}
+    </section></details>`;
+  }
+  $('#list').innerHTML = html;
+}
+
+function createOrder() {
+  const miss = [];
+  state.depts.forEach(d => state.items.filter(i => i.missing && i.dept === d.id).forEach(i => miss.push([i, d])));
+  if (!miss.length) return toast('אין פריטים חסרים');
+  state.orders.push({ id: uid(), created: Date.now(), status: 'open', items: miss.map(([i, d]) => ({
+    id: i.id, name: i.name, dept: d.id, deptName: d.name, icon: d.icon, unit: d.unit || 'יח׳', qty: +i.qty || 1, note: i.note || '', got: false })) });
+  miss.forEach(([i]) => { i.qty = 0; i.missing = false; i.cart = false; });
+  save(); view = 'orders'; render(); window.scrollTo(0, 0); toast('ההזמנה נשמרה');
+}
+
+function returnToList(list) {
+  list.forEach(x => {
+    let it = findItem(x.id);
+    if (!it) { it = { id: x.id, name: x.name, dept: findDept(x.dept) ? x.dept : state.depts[0].id, note: x.note, qty: 0, missing: false, cart: false }; state.items.push(it); }
+    it.qty = (+it.qty || 0) + (+x.qty || 0); it.missing = it.qty > 0;
+  });
+}
+
+function orderText(o) {
+  let t = `📦 הזמנה ${fmtDate(o.created)}\n`, last = null;
+  o.items.forEach(x => {
+    if (x.deptName !== last) { last = x.deptName; t += `\n${x.icon} ${x.deptName}\n`; }
+    t += `• ${x.name} — ${oQty(x)}${x.note ? ` (${x.note})` : ''}\n`;
+  });
+  return t.trim();
+}
+
+async function shareText(t) {
+  if (navigator.share) {
+    try { await navigator.share({ text: t }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  window.open('https://wa.me/?text=' + encodeURIComponent(t), '_blank');
 }
 
 function moveDept(id, dir) {
@@ -355,10 +437,7 @@ function listText() {
 async function shareList() {
   const t = listText();
   if (!t) return toast('אין פריטים חסרים');
-  if (navigator.share) {
-    try { await navigator.share({ text: t }); return; } catch (e) { if (e.name === 'AbortError') return; }
-  }
-  window.open('https://wa.me/?text=' + encodeURIComponent(t), '_blank');
+  shareText(t);
 }
 
 async function copyList() {
@@ -399,7 +478,7 @@ document.addEventListener('click', e => {
   const a = el.dataset.action, id = el.dataset.id;
   const menu = $('#menuDlg');
   switch (a) {
-    case 'tab': view = el.dataset.view; if (view === 'shop') editMode = false; render(); window.scrollTo(0, 0); break;
+    case 'tab': view = el.dataset.view; if (view !== 'home') editMode = false; render(); window.scrollTo(0, 0); break;
     case 'collapse': collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); saveUI(); render(); break;
     case 'item': {
       const it = findItem(id); if (!it) break;
@@ -412,6 +491,27 @@ document.addEventListener('click', e => {
       it.qty = Math.max(0, (+it.qty || 0) - 1);
       if (!it.qty) { it.missing = false; it.cart = false; }
       save(); render(); break;
+    }
+    case 'order-create': createOrder(); break;
+    case 'got': { const o = findOrder(el.dataset.oid); const x = o && o.items[+el.dataset.idx]; if (x) { x.got = !x.got; save(); render(); } break; }
+    case 'order-share': { const o = findOrder(el.dataset.oid); if (o) shareText(orderText(o)); break; }
+    case 'order-close': {
+      const o = findOrder(el.dataset.oid); if (!o) break;
+      if (!confirm('לסגור את ההזמנה?')) break;
+      const left = o.items.filter(x => !x.got);
+      if (left.length && confirm(`${left.length} פריטים לא סומנו כהתקבלו. להחזיר אותם לרשימת החסרים?`)) returnToList(left);
+      o.status = 'closed'; o.closed = Date.now(); save(); render(); toast('ההזמנה נסגרה'); break;
+    }
+    case 'order-cancel': {
+      const o = findOrder(el.dataset.oid); if (!o) break;
+      if (!confirm('לבטל את ההזמנה ולהחזיר את כל הפריטים שלה לרשימת החסרים?')) break;
+      returnToList(o.items); state.orders = state.orders.filter(z => z !== o); save(); render(); toast('הפריטים הוחזרו לרשימה'); break;
+    }
+    case 'order-reopen': { const o = findOrder(el.dataset.oid); if (o) { o.status = 'open'; delete o.closed; save(); render(); } break; }
+    case 'order-delete': {
+      const o = findOrder(el.dataset.oid); if (!o) break;
+      if (!confirm('למחוק את ההזמנה הסגורה לצמיתות?')) break;
+      state.orders = state.orders.filter(z => z !== o); save(); render(); break;
     }
     case 'cart': { const it = findItem(id); if (it) { it.cart = !it.cart; save(); render(); } break; }
     case 'finish': {
